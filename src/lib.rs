@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use thiserror::Error;
+
 #[derive(Debug, Default)]
 pub struct Machine {
     regs: Registers,
@@ -17,10 +19,7 @@ impl Machine {
 
     #[must_use]
     pub fn state(&self) -> String {
-        format!(
-            "a0:{:08x} sp:{:08x} ra:{:08x}",
-            self.regs.a0, self.regs.sp, self.regs.ra
-        )
+        format!("a0:{:08x}", self.regs.a0)
     }
 }
 
@@ -28,15 +27,10 @@ impl Machine {
 enum RegisterID {
     X0,
     A0,
-    RA,
-    SP,
 }
 
 #[derive(Debug, Default)]
 pub struct Registers {
-    pc: Register,
-    ra: Register,
-    sp: Register,
     a0: Register,
 }
 
@@ -59,31 +53,45 @@ enum Operation {
     LoadImmediate,
 }
 
-fn decode(word: Word) -> Option<Instruction> {
-    let operation = match word & 0b11111 {
-        1 => Operation::LoadImmediate,
-        _ => return None,
-    };
-    let dest = reg_id((word >> 5) & 0b1111);
-    let src1 = reg_id((word >> 9) & 0b1111);
-    let src2 = reg_id((word >> 13) & 0b1111);
-    let imm = (word >> 16)
-        .try_into()
-        .expect("immediate argument should be 16 bits");
-    Some(Instruction {
-        operation,
-        src1,
-        src2,
-        dest,
-        imm,
-    })
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("invalid instruction")]
+    InvalidInstruction,
+    #[error("unknown instruction {0}")]
+    UnknownInstruction(Word),
 }
 
-fn reg_id(id: u32) -> RegisterID {
-    match id {
-        0 => RegisterID::X0,
-        1 => RegisterID::A0,
-        _ => panic!("invalid register ID {id:02x}"),
+impl TryFrom<Word> for Instruction {
+    type Error = Error;
+
+    fn try_from(word: Word) -> Result<Self, Self::Error> {
+        let operation = match word & 0b11111 {
+            1 => Operation::LoadImmediate,
+            _ => return Err(Error::UnknownInstruction(word)),
+        };
+        let dest = RegisterID::from((word >> 5) & 0b1111);
+        let src1 = RegisterID::from((word >> 9) & 0b1111);
+        let src2 = RegisterID::from((word >> 13) & 0b1111);
+        let imm = (word >> 16)
+            .try_into()
+            .expect("immediate argument should be 16 bits");
+        Ok(Instruction {
+            operation,
+            src1,
+            src2,
+            dest,
+            imm,
+        })
+    }
+}
+
+impl From<u32> for RegisterID {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => RegisterID::X0,
+            1 => RegisterID::A0,
+            _ => panic!("invalid register ID {value:02x}"),
+        }
     }
 }
 
@@ -101,11 +109,10 @@ mod tests {
             dest: RegisterID::A0,
             imm: 2,
         };
-        match decode(input) {
-            Some(ins) => {
-                assert_eq!(want, ins, "wrong decode: {input:08x}");
-            }
-            _ => panic!("not decoded: {input:08x}"),
+        if let Ok(ins) = Instruction::try_from(input) {
+            assert_eq!(want, ins, "wrong decode: {input:08x}");
+        } else {
+            panic!("not decoded: {input:08x}");
         }
     }
 }
